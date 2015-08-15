@@ -25,11 +25,8 @@ endif
 " - command
 " Can be called:
 "  - with no parameters, will load info directory
-"  - with one parameter, will load named node (if in (file)node format) or top
-"    page for named manual
-"  - with two or more parameters, will use first parameter as manual name
-"    (parentheses are optional) and all other parameters as node name
-" eg. :ViewDocInfo gawk Getting Started   will load "(gawk)Getting Started"
+"  - with one or more parameters, it behaves identically to info command.
+" eg. :ViewDocInfo (coreutils)ls invocation
 command -bar -bang -nargs=* -complete=custom,s:CompleteInfo ViewDocInfo
 	\ call ViewDoc('<bang>'=='' ? 'new' : 'doc', s:ParamsToNode(<f-args>), 'infocmd')
 " - abbrev
@@ -53,8 +50,17 @@ function s:ViewDoc_info(topic, filetype, synid, ctx)
 		" patterns below contain some empty groups \(\), this is intentional,
 		" because we want to have link parts in the same groups, no matte whet
 		" format the link has
-		if synIDattr(a:synid, 'name') == 'infoLinkDir' ||
-		\  synIDattr(a:synid, 'name') == 'infoDirTarget'
+		if synIDattr(a:synid, 'name') == 'infoNavLink'
+			" links in the top navigation line
+			let nav_match = matchlist(getline('.')[:col('.')], '^File:.*\(Prev\|Next\|Up\): \(.\)')
+			let nav = nav_match[1]
+			if nav_match[2] == '('
+				let pattern = '^File: .*' . nav . ': \([^,]*\)\(\)\(\)'
+			else
+				let pattern = '^File: .*' . nav . ': \(\)\([^,]*\)\(\)'
+			endif
+		elseif synIDattr(a:synid, 'name') == 'infoLinkDir' ||
+		\      synIDattr(a:synid, 'name') == 'infoDirTarget'
 			" links in main directory
 			let pattern = '^\* [^:]\+: \(([^)]\+)\)\([^.]*\)\.\(\)'
 		elseif synIDattr(a:synid, 'name') == 'infoLinkMenu'
@@ -123,7 +129,6 @@ function s:ViewDoc_info_search(topic, filetype, synid, ctx)
 	for idx in indices
 		execute 'silent $r !' . g:viewdoc_info_cmd . ' ' . shellescape(s:FixNodeName(idx), 1)
 	endfor
-	1
 	" search for a first matching index entry
 	if search('^\* ' . a:topic . '\W')
 		let current_line = getline('.')
@@ -155,7 +160,7 @@ endfunction
 " Handler for command line commands
 function s:ViewDoc_info_cmd(topic, ...)
 	let h = { 'ft': 'info',
-        	\ 'topic': s:FixNodeName(a:topic) }
+		\ 'topic': s:FixNodeName(a:topic) }
 	let h.cmd = printf('%s %s -o-', g:viewdoc_info_cmd, shellescape(h.topic, 1))
 	return h
 endfunction
@@ -168,26 +173,18 @@ endfunction
 function s:ParamsToNode(...)
 	if a:0 == 0
 		return '(dir)Top'
-	elseif a:0 == 1
-		if a:1 =~ '^(.\+)'
-			return a:1
-		else
-			return printf('(%s)Top', a:1)
-		endif
 	else
-		if a:1 =~ '^(.\+)'
-			return join(a:000, ' ')
-		else
-			return printf('(%s)%s', a:1, join(a:000[1:], ' '))
-		endif
+		let params =  join(map(copy(a:000), 'escape(v:val, "( )")'), ' ')
+		return system(printf('%s %s -o- | head -n 2', g:viewdoc_info_cmd, params) .
+		\             ' | sed -n ''s/^File: \(.*\)\.info,  Node: \([^,]*\),.*/(\1)\2/p''')
 	endif
 endfunction
 
 " Helper to fix (file) parts where manuals have versioned filenames
 function s:FixNodeName(node)
 	let file = substitute(a:node, '^(\([^)]\+\)).*', '\1', '')
-	if globpath('/usr/share/info', file.'.info*') == ''
-		let filenames = split(globpath('/usr/share/info', file.'-*.info*'))
+	if globpath(g:viewdoc_info_path, file.'.info*') == ''
+		let filenames = split(globpath(g:viewdoc_info_path, file.'-*.info*'))
 		let candidates = []
 		for fn in filenames
 			call add(candidates, substitute(fn, '^.*/\([^/]\+\)\.info.*$', '\1', ''))
@@ -204,16 +201,19 @@ endfunction
 " node names from manual, whose name is param1 when invoked for any other
 " parameter
 function s:CompleteInfo(ArgLead, CmdLine, CursorPos)
-	let parts = split(strpart(a:CmdLine, 0, a:CursorPos).'|')
-	if len(parts)>2
-		let heads = system(g:viewdoc_info_cmd . ' --subnodes ' .
-		\           shellescape(parts[1], 1) . " 2>/dev/null | grep '^File: .*,  Node:'")
-		return substitute(heads, 'File: [^\n]*,  Node: \([^,]*\),  [^\n]*', '\1', 'g')
-	else
-		return substitute(substitute(globpath(g:viewdoc_info_path, '*.info*'),
-		\                            '[^\n]*/\([^/]\+\).info[^\n]*', '\1', 'g'),
-		\                 '\([^\n]*\n\)\1*', '\1', 'g')
-  endif
+	let part = join(split(substitute(a:CmdLine[0:a:CursorPos], '\\', '', 'g'))[1:], ' ')
+	let base_cmd = g:viewdoc_info_cmd . " '(dir)Top' 2>/dev/null"
+	let keys_pipe = ' | sed -n ''s/\* \([^:]*\): (.*/\1/p'''
+	let ext_pipe = ' | sed -n ''s/\* [^:]*: \(([^.]*\)\..*/\1/p'' | sort | uniq'
+	if len(part) == 0
+		return system(base_cmd . keys_pipe)
+	endif
+	let pipe = keys_pipe
+	if part[0] == '('
+		let pipe = ext_pipe
+	endif
+	let part = part . (len(a:ArgLead) == 0 ? ' ' : '')
+	return escape(system(base_cmd . pipe . " | sed -n '/^" . part . "/p'"), ' ')
 endfunction
 
 
