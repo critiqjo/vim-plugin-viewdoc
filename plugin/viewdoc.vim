@@ -58,6 +58,11 @@ if !exists('g:no_plugin_maps') && !exists('g:no_viewdoc_maps')
 		nnoremap <unique> K     :call ViewDoc('doc', '<cword>')<CR>
 	endif
 endif
+
+function GetTopicAsSuffix(topic)
+	return '\ ' . escape(expand(a:topic)[:8], ' <>[]\')
+endfunction
+
 " - function
 " call ViewDoc('new', '<cword>')		auto-detect context/syntax and file type
 " call ViewDoc('doc', 'bash')			auto-detect only file type
@@ -67,8 +72,13 @@ function ViewDoc(target, topic, ...)
 
 	if a:target != 'inplace'
 		let prev_tabpagenr = tabpagenr()
-		call s:OpenBuf(a:target)
+		call s:OpenBuf(a:target, a:topic)
 		let b:stack = 0
+	else
+		let bufname = bufname('%')
+		let bufname = substitute(bufname, '\(\]\?\)\ .*$', '\1', '') . GetTopicAsSuffix(a:topic)
+		silent 0file
+		execute 'silent file ' . bufname
 	endif
 
 	" Force same settings as :help does
@@ -263,19 +273,23 @@ endfunction
 
 " call s:OpenBuf('doc')		open existing '[Doc]' buffer (create if not exists)
 " call s:OpenBuf('new')		create and open new '[DocN]' buffer
-function s:OpenBuf(target)
+function s:OpenBuf(target, topic)
 	let bufname = escape(s:bufname, '[]\')
 	let [tabnr, winnr, bufnr] = s:FindBuf(bufname)
+	let suffix = GetTopicAsSuffix(a:topic)
 
 	if a:target == 'new'
 		let s:bufid = s:bufid + 1
 		let bufname = substitute(bufname, '\(\]\?\)$', s:bufid . '\1', '')
-		execute g:viewdoc_open . ' ' . bufname
+		execute g:viewdoc_open . ' ' . bufname . suffix
 	elseif tabnr == -1
-		execute g:viewdoc_open . ' ' . bufname
+		execute g:viewdoc_open . ' ' . bufname . suffix
 	else
+		let bufname = bufname . suffix
 		execute 'tabnext ' . tabnr
 		execute winnr . 'wincmd w'
+		silent 0file
+		execute 'silent file ' . bufname
 	endif
 	if g:viewdoc_only
 		only!
@@ -306,7 +320,7 @@ endfunction
 "	[-1, -1,  Z] if buf not visible
 "	[ X,  Y,  Z] if buf visible
 function s:FindBuf(bufname)
-	let bufnr = bufnr('^' . a:bufname . '$')
+	let bufnr = bufnr('^' . a:bufname)
 	if bufnr == -1
 		return [-1, -1, -1]
 	endif
